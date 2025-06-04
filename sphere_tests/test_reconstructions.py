@@ -222,7 +222,7 @@ from cil.framework import ImageGeometry
 
 
 data_norm.reorder('tigre')
-# %% Tigre attempts
+# %% Tigre attempts using tilted rotation axis method from tigre docs
 tilt = 30
 geo = tigre.geometry()
 geo.DSD = 5
@@ -244,16 +244,12 @@ geo.mode = "parallel"  # Or 'parallel'. Geometry type.
 geo.COR = 0  # y direction displacement for COR, this can also be defined per angle (mm)
 
 # geo.rotDetector = np.array([1, 0, 0])
-
 # geo.rotDetector = np.array([0, np.deg2rad(tilt), 0])
-
 
 tilt_direction = np.array([1, 0, 0])
 untilted_rotation_axis = np.array([0, 0, 1])
 rotation_matrix = R.from_rotvec(np.radians(tilt) * tilt_direction)
 tilted_rotation_axis = rotation_matrix.apply(untilted_rotation_axis)
-
-
 
 euler_angles = []
 for angle in angle_set:
@@ -263,27 +259,130 @@ for angle in angle_set:
     euler_angles.append(euler)
 
 euler_angles = np.array(euler_angles) 
-
-
 recon = algs.fbp(data_norm.array, geo, np.deg2rad(euler_angles))
 # show2D(recon)
 # plt.plot(recon[int(size/2), int(size/2),:])
-
-
 # plt.plot(np.linspace(0,size*np.cos(np.deg2rad(tilt)),size),y)
 
 show2D([recon[cube_plot_offsets[0],::], recon[:,cube_plot_offsets[1]], recon[:,:,cube_plot_offsets[2]]], num_cols=3)
 
-# %%
-anglesY = np.linspace(0, 2 * np.pi, numProjs)
-anglesZ2 = anglesY
-anglesZ1 = np.pi * np.sin(np.linspace(0, 2 * np.pi, numProjs))
-angles = np.vstack([anglesZ1, anglesY, anglesZ2]).T
+# %% Using CIL2tigre geometry 
+from cil.plugins.tigre import CIL2TIGREGeometry
+tigre_geom, tigre_angles = CIL2TIGREGeometry.getTIGREGeometry(ig,ag)
 
 
+ag_in = ag.copy()
+system = ag_in.config.system
+system.align_reference_frame('tigre')
 
-geo = tigre.geometry_default(high_resolution=False)
+ #TIGRE's interpolation fp must have the detector outside the reconstruction volume otherwise the ray is clipped
+#https://github.com/CERN/TIGRE/issues/353
+lenx = (ig.voxel_num_x * ig.voxel_size_x)
+leny = (ig.voxel_num_y * ig.voxel_size_y)
+lenz = (ig.voxel_num_z * ig.voxel_size_z)
 
+panel_width = max(ag_in.config.panel.num_pixels * ag_in.config.panel.pixel_size)*0.5
+clearance_len =  np.sqrt(lenx**2 + leny**2 + lenz**2)/2 + panel_width
+
+geo = tigre.geometry()
+geo.DSO = clearance_len
+geo.DSD = 2*clearance_len
+geo.mode = 'parallel'
+
+
+geo.nVoxel = np.array( [ig.voxel_num_z, ig.voxel_num_y, ig.voxel_num_x] )
+# size of each voxel (mm)
+geo.dVoxel = np.array( [ig.voxel_size_z, ig.voxel_size_y, ig.voxel_size_x]  )
+
+# Detector parameters
+# (V,U) number of pixels        (px)
+geo.nDetector = np.array(ag_in.config.panel.num_pixels[::-1])
+# size of each pixel            (mm)
+geo.dDetector = np.array(ag_in.config.panel.pixel_size[::-1])
+geo.sDetector = geo.dDetector * geo.nDetector    # total size of the detector    (mm)
+
+#TIGRE's interpolation fp must have the detector outside the reconstruction volume otherwise the ray is clipped
+#https://github.com/CERN/TIGRE/issues/353
+lenx = (ig.voxel_num_x * ig.voxel_size_x)
+leny = (ig.voxel_num_y * ig.voxel_size_y)
+lenz = (ig.voxel_num_z * ig.voxel_size_z)
+
+panel_width = max(ag_in.config.panel.num_pixels * ag_in.config.panel.pixel_size)*0.5
+clearance_len =  np.sqrt(lenx**2 + leny**2 + lenz**2)/2 + panel_width
+
+geo.is2D = False
+
+ind = np.asarray([2, 0, 1])
+flip = np.asarray([1, 1, -1])
+
+
+geo.offOrigin = np.array( [0,0,0] )
+geo.offDetector = np.array( [system.detector.position[2], system.detector.position[0], 0])
+
+#shift origin z to match image geometry
+#this is in CIL reference frames as the TIGRE geometry rotates the reconstruction volume to match our definitions
+geo.offOrigin[0] += ig.center_z
+
+
+#convert roll, pitch, yaw
+U = system.detector.direction_x[ind] * flip
+V = system.detector.direction_y[ind] * flip
+
+roll = np.arctan2(-V[1], V[0])
+pitch = np.arcsin(V[2])
+yaw = np.arctan2(-U[2],U[1])
+
+#shift origin to match image geometry
+geo.offOrigin[1] += ig.center_y
+geo.offOrigin[2] += ig.center_x
+
+theta = yaw
+panel_origin = ag_in.config.panel.origin
+if 'right' in panel_origin and 'top' in panel_origin:
+    roll += np.pi
+elif 'right' in panel_origin:
+    yaw += np.pi
+elif 'top' in panel_origin:
+    pitch += np.pi
+
+geo.rotDetector = np.array((roll, pitch, yaw))
+
+# total size of the image       (mm)
+geo.sVoxel = geo.nVoxel * geo.dVoxel
+
+# Auxiliary
+geo.accuracy = 0.5                        # Accuracy of FWD proj          (vx/sample)
+
+angles = ag.config.angles.angle_data + ag.config.angles.initial_angle
+if ag.config.angles.angle_unit == AngleUnit.DEGREE:
+    angles *= (np.pi/180.)
+
+#convert CIL to TIGRE angles s
+angles = -(angles + np.pi/2 + theta )
+
+#angles in range -pi->pi
+for i, a in enumerate(angles):
+    while a < -np.pi:
+        a += 2 * np.pi
+    while a >= np.pi:
+        a -= 2 * np.pi
+    angles[i] = a
+
+euler_angles = []
+for angle in angles:
+    R1 = R.from_euler("z", angle, degrees=False)
+    combined = rotation_matrix * R1
+    euler = combined.as_euler("ZYZ", degrees=False)
+    euler_angles.append(euler)
+
+euler_angles = np.array(euler_angles) 
+recon = algs.fbp(data_norm.array, geo, euler_angles)
+
+# show2D(recon)
+# plt.plot(recon[int(size/2), int(size/2),:])
+# plt.plot(np.linspace(0,size*np.cos(np.deg2rad(tilt)),size),y)
+
+show2D([recon[cube_plot_offsets[0],::], recon[:,cube_plot_offsets[1]], recon[:,:,cube_plot_offsets[2]]], num_cols=3)
 # %%
 
 # %%
