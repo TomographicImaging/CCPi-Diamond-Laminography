@@ -21,85 +21,45 @@ from cil.io import NEXUSDataWriter
 from cil.plugins.tigre import CIL2TIGREGeometry
 import tigre
 
+from cil.framework import DataContainer, ImageData, ImageGeometry, AcquisitionGeometry
+from cil.plugins.tigre import ProjectionOperator
 # %%
-#create checker-board projection
-# checker = np.zeros((16,16))
-# ones = np.ones((4,4))
-# for j in range(4):
-#     for i in range(4):
-#         if (i + j)% 2 == 0:
-#             checker[j*4:(j+1)*4,i*4:(i+1)*4] = ones
-# checker3D = np.expand_dims(checker,1)
-# show2D(checker3D, slice_list=[(0, 8), (1, 0), (2, 8)], num_cols=3)
-# %%
-# lines = np.zeros((16,16), dtype=np.float32)
-# lines[4:8,:] = 1
-# lines[12:16,:] = 1
-# lines = np.expand_dims(lines,1)
-# # show2D(lines)
-# # lines3D = np.expand_dims(lines, 0).transpose()
-# lines = lines
-# from cil.framework import DataContainer
-# lines = DataContainer(lines, dimension_labels=['X', 'Y', 'Z'])
-# show2D(lines,
-#     #    ['X', 'Y', 'Z'], 
-#        slice_list=[(0, int(lines.shape[0]/2)), (1, int(lines.shape[1]/2)), (2, int(lines.shape[2]/2))], 
-#        num_cols=3,
-#        origin='lower-left')
-
-# geo = tigre.geometry()
-# geo.DSO = 5
-# geo.DSD = 5
-# geo.nDetector = np.array([16, 16])
-# geo.dDetector = np.array([1, 1]) 
-# geo.sDetector = geo.nDetector * geo.dDetector
-# geo.nVoxel = np.array(lines.shape)
-# geo.sVoxel = np.array(lines.shape)
-# geo.dVoxel = geo.sVoxel/geo.nVoxel
-# geo.mode = "parallel"
-# geo.accuracy = 0.5
-
-# out = tigre.Ax(lines.array.astype(np.float32), geo, np.array([0, np.pi/2, np.pi]))
-# show2D(out, ['0', 'pi/2', 'pi'], 
-#        slice_list = [(0,0),(0,1),(0,2)],
-#        num_cols=3)
-# %% i think this should be right
-lines = np.zeros((2, 16,16), dtype=np.float32)
-# lines[:,2:14,2:6] = 1
-# lines[:,2:14,10:14] = 1
-lines[:,:,4:8] = 1
-lines[:,:,12:16] = 1
+lines = np.zeros((6, 16,16), dtype=np.float32)
+lines[2:4,2:14,2:6] = 1
+lines[2:4,2:14,10:14] = 1
+# lines = np.zeros((2, 16,16), dtype=np.float32)
+# lines[:,:,4:8] = 1
+# lines[:,:,12:16] = 1
 # lines = np.expand_dims(lines,2)
 # show2D(lines)
 # lines3D = np.expand_dims(lines, 0).transpose()
-from cil.framework import DataContainer, ImageData, ImageGeometry, AcquisitionGeometry
-from cil.plugins.tigre import ProjectionOperator
 
-ig = ImageGeometry(16,16,2)
+
+ig = ImageGeometry(lines.shape[1],lines.shape[2],lines.shape[0])
 lines = ImageData(lines, geometry=ig)
 # lines = DataContainer(lines, dimension_labels=['X', 'Y', 'Z'])
 show2D(lines,
     #    ['X', 'Y', 'Z'], 
-       slice_list=[(0, int(lines.shape[0]/2)), (1, int(lines.shape[1]/2)), (2, int(lines.shape[2]/2))], 
+       slice_list=[(0, int(lines.shape[0]/2)), (1, int(lines.shape[1]/2)), (2, 3)], 
        num_cols=3,
        origin='lower-left')
 # %%
-tilt = 0 # degrees
+tilt = 30 # degrees
+tilt_rad = np.deg2rad(tilt)
 tilt_direction = np.array([1, 0, 0])
 beam_direction = np.array([0, 1, 0])
 untilted_rotation_axis = np.array([0, 0, 1])
-rotation_matrix = R.from_rotvec(np.radians(tilt) * tilt_direction)
+rotation_matrix = R.from_rotvec(tilt_rad * tilt_direction)
 tilted_rotation_axis = rotation_matrix.apply(untilted_rotation_axis)
 
 # ag = AcquisitionGeometry.create_Parallel3D(rotation_axis_direction=untilted_rotation_axis)\
 #     .set_angles([0,90])\
-#     .set_panel([16, 16])
-# geo, angles = CIL2TIGREGeometry.getTIGREGeometry(ig, ag)
-
+#     .set_panel(lines.shape[1:3])
 
 ag = AcquisitionGeometry.create_Parallel3D(rotation_axis_direction=untilted_rotation_axis)\
     .set_angles(np.arange(0,360,1))\
-    .set_panel([20, 20])
+    .set_panel(lines.shape[1:3])
+
 geo, angles = CIL2TIGREGeometry.getTIGREGeometry(ig, ag)
 
 
@@ -120,25 +80,69 @@ for angle in angles:
     euler_angles.append(euler)
 
 euler_angles = np.array(euler_angles) 
-out = tigre.Ax(lines.array.astype(np.float32), geo, euler_angles, "Siddon")
+out = tigre.Ax(lines.array.astype(np.float32), geo, euler_angles, "interpolated")
 show2D([out[0], out[90], out[180]], 
        ['0', r'$\pi/2$', r'$\pi$'],
-       num_cols=5)
-# %%
-vol = tigre.Atb(out, geo, euler_angles)
-show2D(vol,
-       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, int(vol.shape[2]/2))], 
        num_cols=3)
+# show2D([out[0], out[1]], 
+#        ['0', r'$\pi$'],
+#        num_cols=2)
+# %%
+weights = np.zeros_like(angles)
+weighted_projections = np.zeros_like(out)
+for i, theta in enumerate(np.deg2rad(ag.angles)):
+       # weights[i] = np.sqrt(1 - (np.sin(tilt_rad) * np.cos(theta))**2)
+       Rz = R.from_rotvec(theta * untilted_rotation_axis)
+       p_theta = Rz.apply(tilt_direction)
+       weights[i] = 1/np.sqrt(1 - np.dot(tilted_rotation_axis, p_theta)**2)
+
+       # v = Rz.apply(det_right)
+       # weight = np.abs(u[0])
+       weighted_projections[i,:,:] = out[i,:,:]*weights[i]
+plt.plot(ag.angles,weights)
+plt.xlabel('Angle (degrees)')
+plt.ylabel('Weight')
+plt.grid()
+# %%
+
+vol = tigre.Atb(out, geo, euler_angles)
+show2D(vol,   
+       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, 4)], 
+       num_cols=3)
+# %%
+weighted_vol = tigre.Atb(weighted_projections, geo, euler_angles)
+show2D(weighted_vol,   
+       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, 4)], 
+       num_cols=3)
+show2D(vol-weighted_vol,   
+       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, int(vol.shape[2]/2))], 
+       num_cols=3, cmap='RdBu_r', fix_range=(-150, 150))
 # %%
 vol = tigre.algorithms.fbp(out, geo, euler_angles)
 show2D(vol,
-       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, int(vol.shape[2]/2))], 
+       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2,4)], 
        num_cols=3)
+# %%
+weighted_vol = tigre.algorithms.fbp(weighted_projections, geo, euler_angles)
+show2D(weighted_vol,   
+       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, 4)], 
+       num_cols=3)
+show2D(vol-weighted_vol,   
+       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, int(vol.shape[2]/2))], 
+       num_cols=3, cmap='RdBu_r', fix_range=(-0.06, 0.06))
 # %%
 vol = tigre.algorithms.sirt(out, geo, euler_angles, 200)
 show2D(vol,
-       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, int(vol.shape[2]/2))], 
+       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, 4)], 
        num_cols=3)
+# %%
+# weighted_vol = tigre.algorithms.sirt(weighted_projections, geo, euler_angles, 200)
+# show2D(weighted_vol,   
+#        slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, 4)], 
+#        num_cols=3)
+show2D(vol-weighted_vol,   
+       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, int(vol.shape[2]/2))], 
+       num_cols=3, cmap='RdBu_r', fix_range=(-2, 2))
 # %% Not correct for tilted
 
 ad = AcquisitionData(out, geometry=ag)
@@ -148,7 +152,7 @@ ad = AcquisitionData(out, geometry=ag)
 from cil.plugins.tigre import FBP
 vol = FBP(ig, ag)(ad)
 show2D(vol,
-       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, int(vol.shape[2]/2))], 
+       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, 4)], 
        num_cols=3)
 
 # %%
