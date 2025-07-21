@@ -4,7 +4,6 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from scipy.ndimage import rotate
 
-
 import matplotlib.pyplot as plt
 from gvxrPython3 import gvxr
 from gvxrPython3.JSON2gVXRDataReader import *
@@ -44,7 +43,7 @@ show2D(lines,
        num_cols=3,
        origin='lower-left')
 # %%
-tilt = 30 # degrees
+tilt = 0 # degrees
 tilt_rad = np.deg2rad(tilt)
 tilt_direction = np.array([1, 0, 0])
 beam_direction = np.array([0, 1, 0])
@@ -53,12 +52,15 @@ rotation_matrix = R.from_rotvec(tilt_rad * tilt_direction)
 tilted_rotation_axis = rotation_matrix.apply(untilted_rotation_axis)
 
 # ag = AcquisitionGeometry.create_Parallel3D(rotation_axis_direction=untilted_rotation_axis)\
-#     .set_angles([0,90])\
+#     .set_angles([0])\
 #     .set_panel(lines.shape[1:3])
 
 ag = AcquisitionGeometry.create_Parallel3D(rotation_axis_direction=untilted_rotation_axis)\
     .set_angles(np.arange(0,360,1))\
     .set_panel(lines.shape[1:3])
+# ag_tilted = AcquisitionGeometry.create_Parallel3D(rotation_axis_direction=tilted_rotation_axis)\
+#     .set_angles(np.arange(0,360,1))\
+#     .set_panel(lines.shape[1:3])
 
 geo, angles = CIL2TIGREGeometry.getTIGREGeometry(ig, ag)
 
@@ -84,57 +86,96 @@ out = tigre.Ax(lines.array.astype(np.float32), geo, euler_angles, "interpolated"
 show2D([out[0], out[90], out[180]], 
        ['0', r'$\pi/2$', r'$\pi$'],
        num_cols=3)
-# show2D([out[0], out[1]], 
+# show2D([out[0]], 
 #        ['0', r'$\pi$'],
 #        num_cols=2)
 # %%
-weights = np.zeros_like(angles)
-weighted_projections = np.zeros_like(out)
-for i, theta in enumerate(np.deg2rad(ag.angles)):
-       # weights[i] = np.sqrt(1 - (np.sin(tilt_rad) * np.cos(theta))**2)
-       Rz = R.from_rotvec(theta * untilted_rotation_axis)
-       p_theta = Rz.apply(tilt_direction)
-       weights[i] = 1/np.sqrt(1 - np.dot(tilted_rotation_axis, p_theta)**2)
+# weights = np.zeros_like(angles)
+# weighted_projections = np.zeros_like(out)
+# for i, theta in enumerate(np.deg2rad(ag.angles)):
+#        # weights[i] = np.sqrt(1 - (np.sin(tilt_rad) * np.cos(theta))**2)
+#        Rz = R.from_rotvec(theta * untilted_rotation_axis)
+#        p_theta = Rz.apply(tilt_direction)
+#        weights[i] = 1/np.sqrt(1 - np.dot(tilted_rotation_axis, p_theta)**2)
 
-       # v = Rz.apply(det_right)
-       # weight = np.abs(u[0])
-       weighted_projections[i,:,:] = out[i,:,:]*weights[i]
-plt.plot(ag.angles,weights)
-plt.xlabel('Angle (degrees)')
-plt.ylabel('Weight')
-plt.grid()
+#        # v = Rz.apply(det_right)
+#        # weight = np.abs(u[0])
+#        weighted_projections[i,:,:] = out[i,:,:]*weights[i]
+# plt.plot(ag.angles,weights)
+# plt.xlabel('Angle (degrees)')
+# plt.ylabel('Weight')
+# plt.grid()
 # %%
 
-vol = tigre.Atb(out, geo, euler_angles)
-show2D(vol,   
+vol = tigre.Atb(out, geo, euler_angles, backprojection_type='matched')
+show2D(vol,
        slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, 4)], 
        num_cols=3)
 # %%
-weighted_vol = tigre.Atb(weighted_projections, geo, euler_angles)
-show2D(weighted_vol,   
-       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, 4)], 
-       num_cols=3)
-show2D(vol-weighted_vol,   
-       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, int(vol.shape[2]/2))], 
-       num_cols=3, cmap='RdBu_r', fix_range=(-150, 150))
+# weighted_vol = tigre.Atb(weighted_projections, geo, euler_angles)
+# show2D(weighted_vol,
+#        slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, 4)], 
+#        num_cols=3)
+# show2D(vol-weighted_vol,   
+#        slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, int(vol.shape[2]/2))], 
+#        num_cols=3, cmap='RdBu_r', fix_range=(-150, 150))
 # %%
-vol = tigre.algorithms.fbp(out, geo, euler_angles)
+vol2 = tigre.algorithms.fbp(out, geo, angles)
 show2D(vol,
        slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2,4)], 
        num_cols=3)
 # %%
-weighted_vol = tigre.algorithms.fbp(weighted_projections, geo, euler_angles)
-show2D(weighted_vol,   
-       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, 4)], 
-       num_cols=3)
-show2D(vol-weighted_vol,   
-       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, int(vol.shape[2]/2))], 
-       num_cols=3, cmap='RdBu_r', fix_range=(-0.06, 0.06))
+show2D(vol2-vol,
+       slice_list=(2,4))
 # %%
-vol = tigre.algorithms.sirt(out, geo, euler_angles, 200)
+# weighted_vol = tigre.algorithms.fbp(weighted_projections, geo, euler_angles)
+# show2D(weighted_vol,
+#        slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, 4)], 
+#        num_cols=3)
+# show2D(vol-weighted_vol,   
+#        slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, int(vol.shape[2]/2))], 
+#        num_cols=3, cmap='RdBu_r', fix_range=(-0.06, 0.06))
+
+# fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+# ax = axs[0]
+# ax.plot(vol[int(vol.shape[0]/2),8,:], label='Unweighted')
+# ax.plot(weighted_vol[int(vol.shape[0]/2),8,:], label='Weighted')
+
+# ax.grid()
+# ax.legend()
+
+# ax = axs[1]
+# ax.plot(vol[4,4,:], label='Unweighted')
+# ax.plot(weighted_vol[4,4,:], label='Weighted')
+# ax.grid()
+
+# ax = axs[2]
+# ax.plot(vol[4,:,4], label='Unweighted')
+# ax.plot(weighted_vol[4,:,4], label='Weighted')
+# ax.grid()
+
+# plt.tight_layout()
+# %%
+vol = tigre.algorithms.sirt(out, geo, euler_angles, 1)
 show2D(vol,
        slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, 4)], 
        num_cols=3)
+# %%
+from cil.optimisation.algorithms import SIRT
+# Create projection operator using Astra-Toolbox.
+from cil.plugins.tigre import ProjectionOperator
+A = ProjectionOperator(ig, ag_tilted)
+ad = AcquisitionData(out, geometry=ag_tilted)
+# ad.reorder('astra')
+A = tigre.Ax(lines.array.astype(np.float32), geo, euler_angles, "interpolated")
+sirt = SIRT(operator=A, data=ad)
+# %%
+sirt.run(100)
+vol = sirt.solution
+show2D(vol,
+       slice_list=[(0, int(vol.shape[0]/2)), (1, int(vol.shape[1]/2)), (2, 4)], 
+       num_cols=3)
+
 # %%
 # weighted_vol = tigre.algorithms.sirt(weighted_projections, geo, euler_angles, 200)
 # show2D(weighted_vol,   

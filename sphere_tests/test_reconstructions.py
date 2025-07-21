@@ -16,6 +16,7 @@ from cil.plugins.astra.processors import FBP
 from cil.processors import TransmissionAbsorptionConverter
 from cil.utilities.display import show_geometry, show2D, show1D
 from cil.utilities.jupyter import islicer
+from cil.framework.labels import AngleUnit
 from cil.processors import FluxNormaliser, Normaliser
 from cil.framework import AcquisitionData, AcquisitionGeometry
 from cil.io import NEXUSDataWriter
@@ -149,7 +150,7 @@ show2D(data, slice_list=[('angle', 0), ('angle', 45), ('angle',90), ('angle', 13
 # Apply Beer-Lambert law
 data_norm = TransmissionAbsorptionConverter(white_level=1.)(data)
 
-weight_proj = False
+weight_proj = True
 # Weighting
 if weight_proj:
     data_norm.reorder('tigre')
@@ -197,8 +198,8 @@ plt.ylabel(r'Weight $\frac{1}{|a_{\perp}|}$')
 plt.grid()
 # recon30 = recon.copy()
 # %%
-plt.plot(recon.array[int(size/2), int(size/2), :], label='Unweighted')
-# plt.plot(recon_weighted.array[int(size/2), int(size/2), :], label='Weighted')
+# plt.plot(recon.array[int(size/2), int(size/2), :], label='Unweighted')
+plt.plot(recon_weighted.array[int(size/2), int(size/2), :], label='Weighted')
 plt.xlabel('Horizontal x index')
 plt.ylabel('Value')
 # plt.plot(recon30.array[int(size/2), int(size/2), :], label='30 degrees')
@@ -268,38 +269,12 @@ show2D([recon[cube_plot_offsets[0],::], recon[:,cube_plot_offsets[1]], recon[:,:
 
 # %% Using CIL2tigre geometry 
 from cil.plugins.tigre import CIL2TIGREGeometry
-tigre_geom, tigre_angles = CIL2TIGREGeometry.getTIGREGeometry(ig,ag)
+# tigre_geom, tigre_angles = CIL2TIGREGeometry.getTIGREGeometry(ig,ag)
 
 
 ag_in = ag.copy()
 system = ag_in.config.system
 system.align_reference_frame('tigre')
-
- #TIGRE's interpolation fp must have the detector outside the reconstruction volume otherwise the ray is clipped
-#https://github.com/CERN/TIGRE/issues/353
-lenx = (ig.voxel_num_x * ig.voxel_size_x)
-leny = (ig.voxel_num_y * ig.voxel_size_y)
-lenz = (ig.voxel_num_z * ig.voxel_size_z)
-
-panel_width = max(ag_in.config.panel.num_pixels * ag_in.config.panel.pixel_size)*0.5
-clearance_len =  np.sqrt(lenx**2 + leny**2 + lenz**2)/2 + panel_width
-
-geo = tigre.geometry()
-geo.DSO = clearance_len
-geo.DSD = 2*clearance_len
-geo.mode = 'parallel'
-
-
-geo.nVoxel = np.array( [ig.voxel_num_z, ig.voxel_num_y, ig.voxel_num_x] )
-# size of each voxel (mm)
-geo.dVoxel = np.array( [ig.voxel_size_z, ig.voxel_size_y, ig.voxel_size_x]  )
-
-# Detector parameters
-# (V,U) number of pixels        (px)
-geo.nDetector = np.array(ag_in.config.panel.num_pixels[::-1])
-# size of each pixel            (mm)
-geo.dDetector = np.array(ag_in.config.panel.pixel_size[::-1])
-geo.sDetector = geo.dDetector * geo.nDetector    # total size of the detector    (mm)
 
 #TIGRE's interpolation fp must have the detector outside the reconstruction volume otherwise the ray is clipped
 #https://github.com/CERN/TIGRE/issues/353
@@ -310,18 +285,46 @@ lenz = (ig.voxel_num_z * ig.voxel_size_z)
 panel_width = max(ag_in.config.panel.num_pixels * ag_in.config.panel.pixel_size)*0.5
 clearance_len =  np.sqrt(lenx**2 + leny**2 + lenz**2)/2 + panel_width
 
-geo.is2D = False
+geo2 = tigre.geometry()
+geo2.DSO = clearance_len
+geo2.DSD = 2*clearance_len
+geo2.mode = 'parallel'
+
+
+geo2.nVoxel = np.array( [ig.voxel_num_z, ig.voxel_num_y, ig.voxel_num_x] )
+# size of each voxel (mm)
+# geo2.sVoxel = np.array( [ig.voxel_num_z, ig.voxel_num_y, ig.voxel_num_x] )
+# geo2.dVoxel = geo2.sVoxel / geo2.nVoxel
+geo2.dVoxel = np.array( [ig.voxel_size_z, ig.voxel_size_y, ig.voxel_size_x]  )
+
+# Detector parameters
+# (V,U) number of pixels        (px)
+geo2.nDetector = np.array(ag_in.config.panel.num_pixels[::-1])
+# size of each pixel            (mm)
+geo2.dDetector = np.array(ag_in.config.panel.pixel_size[::-1])
+geo2.sDetector = geo2.dDetector * geo2.nDetector    # total size of the detector    (mm)
+
+#TIGRE's interpolation fp must have the detector outside the reconstruction volume otherwise the ray is clipped
+#https://github.com/CERN/TIGRE/issues/353
+lenx = (ig.voxel_num_x * ig.voxel_size_x)
+leny = (ig.voxel_num_y * ig.voxel_size_y)
+lenz = (ig.voxel_num_z * ig.voxel_size_z)
+
+panel_width = max(ag_in.config.panel.num_pixels * ag_in.config.panel.pixel_size)*0.5
+clearance_len =  np.sqrt(lenx**2 + leny**2 + lenz**2)/2 + panel_width
+
+geo2.is2D = False
 
 ind = np.asarray([2, 0, 1])
 flip = np.asarray([1, 1, -1])
 
 
-geo.offOrigin = np.array( [0,0,0] )
-geo.offDetector = np.array( [system.detector.position[2], system.detector.position[0], 0])
+geo2.offOrigin = np.array( [0,0,0] )
+geo2.offDetector = np.array( [system.detector.position[2], system.detector.position[0], 0])
 
 #shift origin z to match image geometry
 #this is in CIL reference frames as the TIGRE geometry rotates the reconstruction volume to match our definitions
-geo.offOrigin[0] += ig.center_z
+geo2.offOrigin[0] += ig.center_z
 
 
 #convert roll, pitch, yaw
@@ -333,8 +336,8 @@ pitch = np.arcsin(V[2])
 yaw = np.arctan2(-U[2],U[1])
 
 #shift origin to match image geometry
-geo.offOrigin[1] += ig.center_y
-geo.offOrigin[2] += ig.center_x
+geo2.offOrigin[1] += ig.center_y
+geo2.offOrigin[2] += ig.center_x
 
 theta = yaw
 panel_origin = ag_in.config.panel.origin
@@ -345,13 +348,13 @@ elif 'right' in panel_origin:
 elif 'top' in panel_origin:
     pitch += np.pi
 
-geo.rotDetector = np.array((roll, pitch, yaw))
+geo2.rotDetector = np.array((roll, pitch, yaw))
 
 # total size of the image       (mm)
-geo.sVoxel = geo.nVoxel * geo.dVoxel
+geo2.sVoxel = geo2.nVoxel * geo2.dVoxel
 
 # Auxiliary
-geo.accuracy = 0.5                        # Accuracy of FWD proj          (vx/sample)
+geo2.accuracy = 0.5                        # Accuracy of FWD proj          (vx/sample)
 
 angles = ag.config.angles.angle_data + ag.config.angles.initial_angle
 if ag.config.angles.angle_unit == AngleUnit.DEGREE:
@@ -376,7 +379,7 @@ for angle in angles:
     euler_angles.append(euler)
 
 euler_angles = np.array(euler_angles) 
-recon = algs.fbp(data_norm.array, geo, euler_angles)
+recon = algs.fbp(data_norm.array, geo2, euler_angles)
 
 # show2D(recon)
 # plt.plot(recon[int(size/2), int(size/2),:])
