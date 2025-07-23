@@ -2,6 +2,7 @@ name: lamino
 channels:
   - conda-forge
   - https://software.repos.intel.com/python/conda
+  - ccpi
 
 dependencies:
   - python=3.12
@@ -13,6 +14,7 @@ dependencies:
   - ipykernel 
   - ipywidgets 
   - scikit-image
+  - scikit-learn
   - matplotlib-base >=3.3.0
   - pip
   - pip:
