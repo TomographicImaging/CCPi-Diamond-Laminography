@@ -31,13 +31,12 @@ if not os.path.exists(output_path):
 # %% Use DIAD model
 diad_model = DiadModel()
 # diad_model.detector_cols = 500
-
 # diad_model.detector_rows = 500
 diad_model.initSimulationEnegine()
 
 energy_in_keV = 25
-exposure_in_sec = 3
-gain = diad_model.initExperimentalParameters(energy_in_keV, exposure_in_sec)
+exposure_in_sec = 3.0
+gain = diad_model.initExperimentalParameters(1.0, "mm", energy_in_keV, exposure_in_sec)
 
 
 # %%

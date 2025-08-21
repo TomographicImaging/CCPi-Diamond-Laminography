@@ -63,12 +63,12 @@ show2D(lines,
        slice_list=[
            (0, shape[0]//2),  
            (1, 100),  
-           (2, 100),  # YZ
+           (2, 100), 
        ],
        num_cols=3,
        origin='lower-left')
 # %%
-tilt = 30 # degrees
+tilt = 0 # degrees
 tilt_rad = np.deg2rad(tilt)
 tilt_direction = np.array([1, 0, 0])
 beam_direction = np.array([0, 1, 0])
