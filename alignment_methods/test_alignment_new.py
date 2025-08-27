@@ -14,6 +14,8 @@ from cil.plugins.astra.processors import FBP
 from cil.optimisation.algorithms import CGLS, SIRT
 from cil.utilities.display import show2D
 from cil.processors import Binner
+from cil.framework import AcquisitionGeometry, AcquisitionData
+
 
 # %%
 
@@ -221,9 +223,7 @@ def geometry_scan_linear(data, ag, tilt_initial, tilt_vals, cor_vals, binning,
     
     if save_slices:
         slices = np.zeros((len(cor_vals)+len(tilt_vals)+len(cor_vals), ig.shape[1], ig.shape[2]))
-    
-    binned_cor_vals = cor_vals/binning
-    
+        
     # scan COR
     print(f"Fix tilt = {tilt_initial:.3f}")
     losses1, slices1, cor_min = linear_cor_scan(data, ag, tilt_initial, cor_vals, voxel_num_z, recon_method, recon_iters, loss_kind, save_slices)
@@ -241,9 +241,47 @@ def geometry_scan_linear(data, ag, tilt_initial, tilt_vals, cor_vals, binning,
     else:
         return cor_min, tilt_min, losses1, losses2, losses3
     
+def joint_geometry_reconstruction(data, ag, p0=(30.0, 5.0), binning=1,
+                                  voxel_num_z=256,
+                                  recon_method ='FBP', recon_iters = None,
+                                  loss_kind='L2', min_method='Powell', maxiter=30,
+                                  bounds=[(0,100),(0,100)], xtol=1e-6,
+                                  save_slices=False):
+    ig = ag.get_ImageGeometry()
+    ig.voxel_num_z = voxel_num_z
+
+
+    p0_binned = (p0[0], p0[1]/binning)
+    bounds_binned = (bounds[0], (bounds[1][0]/binning, bounds[1][1]/binning))
+    evaluations = []
+    slices = []
+    def geom_loss_wrapper(p):
+        tilt, cor = p
+        loss, x = geom_loss(data, ag, tilt, cor, recon_method, recon_iters, voxel_num_z, loss_kind)
+        
+        if save_slices:
+            slices.append(x.as_array()[x.shape[0]//2])
+
+        evaluations.append((tilt, cor * binning, loss))  
+        print(f"tilt: {tilt:.6f}, cor: {cor*binning:.6f}, loss: {loss:.6e}")
+        return loss
+
+    res = minimize(geom_loss_wrapper, np.asarray(p0_binned, float),
+                   method=min_method,
+                   bounds=bounds_binned,
+                   options={'maxiter': maxiter, 'disp': True, 'xtol': xtol})
+    if save_slices:
+        return res, evaluations, slices
+    else:
+        return res, evaluations
+    
 def linear_cor_scan(data, ag, tilt_fixed, cor_vals, voxel_num_z=256, recon_method='FBP', recon_iters=None, loss_kind='L2', save_slices=False):
     losses = np.zeros(len(cor_vals))
     binned_cor_vals = cor_vals/binning
+    
+    if save_slices:
+        slices = np.zeros((len(binned_cor_vals), ig.shape[1], ig.shape[2]))
+    
     for i, cor in enumerate(binned_cor_vals):
 
         loss, x = geom_loss(data, ag, tilt_fixed, cor, recon_method, recon_iters, voxel_num_z, loss_kind)
@@ -263,6 +301,10 @@ def linear_cor_scan(data, ag, tilt_fixed, cor_vals, voxel_num_z=256, recon_metho
     
 def linear_tilt_scan(data, ag, tilt_vals, cor_fixed, voxel_num_z=256, recon_method='FBP', recon_iters=None, loss_kind='L2', save_slices=False):
     losses = np.zeros(len(tilt_vals))
+    
+    if save_slices:
+        slices = np.zeros((len(tilt_vals), ig.shape[1], ig.shape[2]))
+    
     for i, tilt in enumerate(tilt_vals):
         
         loss, x  = geom_loss(data, ag, tilt, cor_fixed, recon_method, recon_iters, voxel_num_z, loss_kind)
@@ -297,9 +339,11 @@ def plot_losses_slice2D(losses, tilt_vals, cor_vals):
     ax = axes[0]
     ax.plot(cor_vals, losses[i,:] )
     
-    xx, yy  = fit_cubic(cor_vals, losses[i,:])
-    ax.plot(xx, yy, '--r')
-    cor_min = xx[np.argmin(yy)]
+    cor_min = get_min(cor_vals, losses[i, :], j)
+    ax.plot([cor_min, cor_min], ax.get_ylim()) 
+    # xx, yy  = fit_cubic(cor_vals, losses[i,:])
+    # ax.plot(xx, yy, '--r')
+    # cor_min = xx[np.argmin(yy)]
     
     ax.set_xlabel('Centre of rotation offset (pixels)')
     ax.set_ylabel('Loss function value')
@@ -307,10 +351,12 @@ def plot_losses_slice2D(losses, tilt_vals, cor_vals):
 
     ax = axes[1]
     ax.plot(tilt_vals, losses[:,j] )
-
-    xx, yy  = fit_cubic(tilt_vals, losses[:, j])
-    ax.plot(xx, yy, '--r')
-    tilt_min = xx[np.argmin(yy)]
+    
+    tilt_min = get_min(tilt_vals, losses[:,j], i)
+    ax.plot([tilt_min, tilt_min], ax.get_ylim())   
+    # xx, yy  = fit_cubic(tilt_vals, losses[:, j])
+    # ax.plot(xx, yy, '--r')
+    # tilt_min = xx[np.argmin(yy)]
 
     ax.set_xlabel('Rotation axis tilt (degrees)')
     ax.set_ylabel('Loss function value')
@@ -319,6 +365,17 @@ def plot_losses_slice2D(losses, tilt_vals, cor_vals):
     plt.tight_layout()
 
     return cor_min, tilt_min
+
+def plot_scipy_loss(evaluations):
+    tilt_array, cor_array, loss_array = zip(*evaluations)
+    plt.figure(figsize=(8, 6))
+
+    scatter = plt.scatter(tilt_array, cor_array, c=loss_array, cmap='viridis', s=100, edgecolors='k')
+    plt.colorbar(scatter, label='Loss value')
+    plt.xlabel('Tilt')
+    plt.ylabel('Cor')
+    plt.grid()
+    plt.tight_layout()
 
 def plot_slice(slices, tilt_vals, cor_vals, tilt, cor):
 
@@ -352,6 +409,7 @@ def plot_slices(slices, tilt_vals, cor_vals):
 
 # %% Load data
 data = NEXUSDataReader(file_name='../output_data/cylinder_tilt_30_cor_offset_5.nxs').read()
+angle_binning = 1
 ag = data.geometry
 ig = ag.get_ImageGeometry()
 data.reorder('astra')
@@ -360,22 +418,45 @@ recon = fbp(data)
 
 show2D(recon)
 
+# %%
+file_path = "data/k11-54286.nxs"
+data, image_key, angles = load_data(file_path, verbose=False)
+data, angles = preprocess_data(data, image_key, angles, verbose=False)
+tilt = 35
+detector_pixel_size=0.54
+angle_binning = 4
+geometry = create_geometry(
+    angles, tilt,
+    data.shape[2], data.shape[1],
+    detector_pixel_size,
+)
+
+data = AcquisitionData(data, geometry=geometry)
+data.reorder('astra')
+# %%
+ag = data.geometry
+ig = ag.get_ImageGeometry()
+data.reorder('astra')
+fbp = FBP(ig, ag)
+recon = fbp(data)
+show2D(recon)
 # %% subsample data
 binning = 4
 roi = {
         'horizontal': (None, None, binning),
         'vertical': (None, None, binning),
-        'angle': (None, None, 1)
+        'angle': (None, None, angle_binning)
     }
 data_binned = Binner(roi)(data)
 ag_binned = data_binned.geometry
 ig_binned = ag_binned.get_ImageGeometry()
 recon = FBP(ig_binned, ag_binned)(data_binned)
+show2D(recon)
 # x_fixed.apply_circular_mask(0.9)
 
 # %% coarse 2D search
-tilt_vals = np.linspace(27, 35, 5)
-cor_vals = np.linspace(2, 10, 5) # un-binned range
+tilt_vals = np.arange(33, 37.1, 0.5) # np.linspace(27, 35, 5)
+cor_vals = np.arange(1, 4, 0.5) # np.linspace(2, 10, 5) # un-binned range
 losses, slices = geometry_scan_2D(data_binned, ag_binned, tilt_vals, cor_vals, binning,
                          voxel_num_z=256,
                          recon_method='FBP', recon_iters=None, 
@@ -385,16 +466,11 @@ losses, slices = geometry_scan_2D(data_binned, ag_binned, tilt_vals, cor_vals, b
 plot_losses2D(losses, tilt_vals, cor_vals)
 cor_centre, tilt_centre = plot_losses_slice2D(losses, tilt_vals, cor_vals)
 # %%
-i, j = np.unravel_index(np.argmin(losses), losses.shape)
-x = cor_vals
-y = losses[i, :]
-
-# %%
 # plot all the slices
 plot_slices(slices, tilt_vals, cor_vals)
 plot_slice(slices, tilt_vals, cor_vals, tilt_centre, cor_centre)
 
-# %% Fine linear search
+# %% Choose fine range
 
 # perhaps we can do something fancy to choose the fine search range?
 # grad_tilt = (losses[min(i+1, len(tilt_vals)-1), j] - losses[max(i-1, 0), j]) / (tilt_vals[min(i+1, len(tilt_vals)-1)] - tilt_vals[max(i-1, 0)])
@@ -413,42 +489,128 @@ print(cor_vals)
 print('2D scan length: ' + str(len(cor_vals)*len(tilt_vals)))
 print('Linear scan length: ' + str(len(cor_vals)+len(tilt_vals)+len(cor_vals)))
 
-# %%
+# %% Fine grid search
 binning = 1
-losses, slices = geometry_scan_linear(data, ag, tilt_centre, tilt_vals, cor_vals, binning,
+roi = {
+        'horizontal': (None, None, binning),
+        'vertical': (None, None, binning),
+        'angle': (None, None, angle_binning)
+    }
+data_binned = Binner(roi)(data)
+ag_binned = data_binned.geometry
+ig_binned = ag_binned.get_ImageGeometry()
+
+losses, slices = geometry_scan_2D(data_binned, ag_binned, tilt_vals, cor_vals, binning,
                          voxel_num_z=256,
                          recon_method='FBP', recon_iters=None, 
                          loss_kind='L2', 
                          save_slices=True)
-
-# losses, slices = geometry_scan_2D(data, ag, tilt_vals, cor_vals, binning,
-#                          voxel_num_z=256,
-#                          recon_method='FBP', recon_iters=None, 
-#                          loss_kind='L2', 
-#                          save_slices=True)
 # %%
+plot_losses2D(losses, tilt_vals, cor_vals)
+cor_centre, tilt_centre = plot_losses_slice2D(losses, tilt_vals, cor_vals)
+# %%
+# plot all the slices
+plot_slices(slices, tilt_vals, cor_vals)
+plot_slice(slices, tilt_vals, cor_vals, tilt_centre, cor_centre)
+# %% Fine linear search
 
+binning = 1
+roi = {
+        'horizontal': (None, None, binning),
+        'vertical': (None, None, binning),
+        'angle': (None, None, angle_binning)
+    }
+data_binned = Binner(roi)(data)
+ag_binned = data_binned.geometry
+ig_binned = ag_binned.get_ImageGeometry()
+# %%
+losses, slices = geometry_scan_linear(data_binned, ag_binned, tilt_centre, tilt_vals, cor_vals, binning,
+                         voxel_num_z=128,
+                         recon_method='FBP', recon_iters=None, 
+                         loss_kind='L2', 
+                         save_slices=True)
 
+# %%Run SciPy minimiser
+binning = 4
+roi = {
+        'horizontal': (None, None, binning),
+        'vertical': (None, None, binning),
+        'angle': (None, None, angle_binning)
+    }
+data_binned = Binner(roi)(data)
+ag_binned = data_binned.geometry
+ig_binned = ag_binned.get_ImageGeometry()
+
+# bounds = [(28.0, 32.0), (4.0, 6.0)]
+bounds = [(33.0, 37.0), (1.0, 3.0)]
+# p0 = (30.0, 5.0)
+p0 = (35.0, 2.0)
+res, evaluations = joint_geometry_reconstruction(data_binned, ag_binned, binning=binning,
+                                    p0=p0,
+                                    recon_iters=15,
+                                    voxel_num_z=256,
+                                    bounds=bounds,
+                                    xtol = 0.2)
+tilt_min = res.x[0]
+cor_min = res.x[1]*binning
+print("Optimised tilt, CoR =", tilt_min, cor_min)
 
 # %%
+binning = 1
+roi = {
+        'horizontal': (None, None, binning),
+        'vertical': (None, None, binning),
+        'angle': (None, None, angle_binning)
+    }
+data_binned = Binner(roi)(data)
+ag_binned = data_binned.geometry
+ig_binned = ag_binned.get_ImageGeometry()
 
+bounds = [(tilt_min-0.5, tilt_min+0.5), (cor_min-0.5, cor_min+0.5)]
+p_opt, loss = joint_geometry_reconstruction(data_binned, ag_binned, binning=binning,
+                                    p0=(tilt_min, cor_min),
+                                    recon_iters=15,
+                                    voxel_num_z=256,
+                                    bounds=bounds,
+                                    xtol = 0.01)
+
+print("Optimised tilt, CoR =", p_opt[0], p_opt[1]*binning)
+tilt_min = p_opt[0]
+cor_min = p_opt[1]*binning
+
+# %%
+update_geometry(ag, tilt_min, cor_min)
+recon = FBP(ig, ag)(data)
+show2D(recon)
+
+# %%
 
 
 # %% Checking what the filters look like
-tilt = 28
-cor = 3.5
+binning = 1
+roi = {
+        'horizontal': (None, None, binning),
+        'vertical': (None, None, binning),
+        'angle': (None, None, angle_binning)
+    }
+data_binned = Binner(roi)(data)
+ag_binned = data_binned.geometry
+ig_binned = ag_binned.get_ImageGeometry()
+
+tilt = 34.87
+cor = 2.455
 voxel_num_z = 256
 
 kind = 'L2'
 
-update_geometry(ag, tilt, cor)
-ig = ag.get_ImageGeometry()
-ig.voxel_num_z = voxel_num_z
-x = reconstruct(data, ig, ag, 'FBP', voxel_num_z, None)
+update_geometry(ag_binned, tilt, cor)
+ig_binned = ag_binned.get_ImageGeometry()
+ig_binned.voxel_num_z = voxel_num_z
+x = reconstruct(data_binned, ig_binned, ag_binned, 'FBP', voxel_num_z, None)
 
-A = ProjectionOperator(ig, ag)
+A = ProjectionOperator(ig_binned, ag_binned)
 yhat = A.direct(x)
-r = yhat - data
+r = yhat - data_binned
 
 r = r.as_array()
 
@@ -459,72 +621,11 @@ loss_r = float(np.sum(r**2))
 loss_h = float(np.sum(h**2))
 loss_s = float(np.sum(s**2))
 
-# %%
+
 show2D([r[:, 0, :], h[:, 0, :], s[:, 0, :]],
        ['Residual ' + str(loss_r), 'High pass filter ' + str(loss_h), 'Sobel filter ' + str(loss_s)],
        num_cols=3)
 
-# %% debug scan
-tilt_vals = np.linspace(27, 35, 5)
-cor_min = 5
-recon_method = 'FBP'
-recon_iters = None
-loss_kind = 'L2'
-binning = 4
-
-# scan tilt
-losses = np.zeros(len(tilt_vals))
-for j, tilt in enumerate(tilt_vals):
-    loss, x = geom_loss(data_binned, ag_binned, tilt, cor_min/binning, recon_method, recon_iters, voxel_num_z, loss_kind)
-
-    losses[j] = loss
-        
-    print(f"[Scan tilt] tilt: {tilt:.3f}, cor: {cor_min:.3f}, loss: {loss:.6e}. {j}/{len(tilt_vals)}")
-# %%
-compare_fits(tilt_vals, losses)
-ind = np.argmin(losses)
-min3pt = get_min(tilt_vals, losses, ind)
-print(min3pt)
-# %%
-
-
-
-# %%Run joint recon
-
-# def joint_geometry_reconstruction(data, ag, p0=(30.0, 5.0), binning=1,
-#                                   voxel_num_z=256,
-#                                   recon_method ='FBP', recon_iters = None,
-#                                   loss_kind='L2', min_method='Powell', maxiter=30,
-#                                   bounds=[(0,100),(0,100)]):
-#     ig = ag.get_ImageGeometry()
-#     ig.voxel_num_z = voxel_num_z
-
-#     x0 = [ig.allocate(0)]
-#     p0_binned = (p0[0], p0[1]/binning)
-#     bounds_binned = (bounds[0], (bounds[1][0]/binning, bounds[1][1]/binning))
-
-#     def geom_loss_wrapper(p):
-#         tilt, cor = p
-#         loss, x = geom_loss(data, ag, tilt, cor, x0[0], recon_method, recon_iters, voxel_num_z, loss_kind)
-        
-#         x0[0] = x  # warm start for next iteration, if using iterative recon
-        
-#         print(f"tilt: {tilt:.3f}, cor: {cor*binning:.3f}, loss: {loss:.6e}")
-#         return loss
-
-#     res = minimize(geom_loss_wrapper, np.asarray(p0_binned, float),
-#                    method=min_method,
-#                    bounds=bounds_binned,
-#                    options={'maxiter': maxiter, 'disp': True})
-#     return res.x, res.fun
-# bounds = [(25.0, 35.0), (4.0, 6.0)]
-
-# p_opt, loss = joint_geometry_reconstruction(data_binned, ag_binned, binning=4,
-#                                     p0=(30.0, 5.0),
-#                                     recon_iters=15,
-#                                     voxel_num_z=256,
-#                                     bounds=bounds)
-# print("Optimised tilt, CoR =", p_opt)
 
 # %% 
 # x_best, p_best = joint_recon(data, ag, x0=None, p0=(30.0, 5.0),
@@ -555,3 +656,81 @@ print(min3pt)
 
 
 # plt.figure(); plt.plot(hist['loss'], '-o'); plt.xlabel('Outer iter'); plt.ylabel('Loss'); plt.grid(True)
+
+
+# %%
+import cil
+from cil.framework import DataContainer
+def load_data(file_path, verbose=True):
+    if verbose:
+        print(f"Reading data from {file_path}")
+    
+    data = cil.io.utilities.HDF5_utilities.read(file_path, '/entry/imaging/data')
+    image_key = cil.io.utilities.HDF5_utilities.read(file_path, '/entry/instrument/EtherCAT/image_key')
+    angles = cil.io.utilities.HDF5_utilities.read(file_path, '/entry/imaging_sum/smaract_zrot')
+    
+    if verbose:
+        print(f"Data loaded: {data.shape}, Image key: {image_key.shape}, Angles: {angles.shape}")
+        unique_keys, counts = np.unique(image_key, return_counts=True)
+        for key, count in zip(unique_keys, counts):
+            key_type = {0: "Tomography", 1: "Flat field", 2: "Dark field"}.get(key, f"Unknown ({key})")
+            print(f"  {key_type} images: {count}")
+    
+    return data, image_key, angles
+
+
+def preprocess_data(data, image_key, angles, verbose=True):
+    flat_indices = np.where(image_key == 1)[0]
+    dark_indices = np.where(image_key == 2)[0]
+    proj_indices = np.where(image_key == 0)[0]
+    
+    if len(flat_indices) == 0:
+        raise ValueError("No flat field images found!")
+    if len(dark_indices) == 0:
+        raise ValueError("No dark field images found!")
+    
+    flat_fields = data[flat_indices]
+    dark_fields = data[dark_indices]
+    projections = data[proj_indices]
+    projection_angles = angles[proj_indices]
+    
+    flat_mean = np.mean(flat_fields, axis=0)
+    dark_mean = np.mean(dark_fields, axis=0)
+    
+    normalized_data = np.zeros_like(projections, dtype=np.float32)
+    for i in range(projections.shape[0]):
+        a = (projections[i] - dark_mean)
+        b = (flat_mean - dark_mean)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            c = np.true_divide(a, b)
+            c[~np.isfinite(c)] = 1e-5
+        normalized_data[i] = c.astype(np.float32)
+    
+    clipped = np.clip(normalized_data, 1e-3, None)
+    absorption_data = -np.log(clipped)
+    
+    if verbose:
+        print(f"Preprocessed: {absorption_data.shape} projections")
+    
+    data_container = DataContainer(absorption_data, dtype=np.float32, 
+                                  dimension_labels=['angle', 'vertical', 'horizontal'])
+    
+    return data_container, projection_angles
+
+def create_geometry(projection_angles, tilt_angle, num_pixels_x, num_pixels_y,
+                   detector_pixel_size):
+    tilt = np.radians(tilt_angle)
+    
+    ag = AcquisitionGeometry.create_Parallel3D(
+        rotation_axis_direction=[0, -np.sin(tilt), np.cos(tilt)],
+        units="microns"
+    )
+    
+    ag.set_panel(
+        num_pixels=[num_pixels_x, num_pixels_y],
+        origin='top-left',
+        pixel_size=detector_pixel_size
+    )
+    
+    ag.set_angles(projection_angles)
+    return ag
