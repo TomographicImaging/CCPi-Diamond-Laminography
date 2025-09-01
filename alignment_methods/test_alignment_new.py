@@ -1,4 +1,4 @@
-# %% Imports
+# %%
 import numpy as np
 import scipy.ndimage as ndi
 from scipy.spatial.transform import Rotation as R
@@ -8,6 +8,7 @@ from scipy.interpolate import interp1d
 
 import matplotlib.pyplot as plt
 
+from cil.framework import Processor
 from cil.io import NEXUSDataReader
 from cil.plugins.astra.operators import ProjectionOperator
 from cil.plugins.astra.processors import FBP
@@ -17,17 +18,16 @@ from cil.processors import Binner
 from cil.framework import AcquisitionGeometry, AcquisitionData
 
 
+
 # %%
 
 def update_geometry(ag, tilt_deg, cor_pix, 
-        beam_direction=np.array([0, 1, 0]),
-        detector_x_direction=np.array([1, 0, 0]),
-        detector_y_direction=np.array([0, 0, -1]),
+        tilt_direction_vector=np.array([1, 0, 0]),
         rotation_axis=np.array([0, 0, 1])
     ):
 
     tilt_rad = np.deg2rad(tilt_deg)
-    rotation_matrix = R.from_rotvec(tilt_rad * detector_x_direction)
+    rotation_matrix = R.from_rotvec(tilt_rad * tilt_direction_vector)
     tilted_rotation_axis = rotation_matrix.apply(rotation_axis)
 
     ag.set_centre_of_rotation(offset=cor_pix, distance_units='pixels')
@@ -245,7 +245,7 @@ def joint_geometry_reconstruction(data, ag, p0=(30.0, 5.0), binning=1,
                                   voxel_num_z=256,
                                   recon_method ='FBP', recon_iters = None,
                                   loss_kind='L2', min_method='Powell', maxiter=30,
-                                  bounds=[(0,100),(0,100)], xtol=1e-6,
+                                  bounds=[(0,100),(0,100)], xtol=(1e-2, 1e-2),
                                   save_slices=False):
     ig = ag.get_ImageGeometry()
     ig.voxel_num_z = voxel_num_z
@@ -257,6 +257,10 @@ def joint_geometry_reconstruction(data, ag, p0=(30.0, 5.0), binning=1,
     slices = []
     def geom_loss_wrapper(p):
         tilt, cor = p
+
+        tilt = p[0] * xtol[0]
+        cor  = p[1] * xtol[1]
+        
         loss, x = geom_loss(data, ag, tilt, cor, recon_method, recon_iters, voxel_num_z, loss_kind)
         
         if save_slices:
@@ -266,14 +270,25 @@ def joint_geometry_reconstruction(data, ag, p0=(30.0, 5.0), binning=1,
         print(f"tilt: {tilt:.6f}, cor: {cor*binning:.6f}, loss: {loss:.6e}")
         return loss
 
-    res = minimize(geom_loss_wrapper, np.asarray(p0_binned, float),
+    p0_scaled = np.array([p0_binned[0] / xtol[0],
+                          p0_binned[1] / xtol[1]], dtype=float)
+    
+    bounds_scaled = [(bounds_binned[0][0] / xtol[0], bounds_binned[0][1] / xtol[0]),
+                     (bounds_binned[1][0] / xtol[1],  bounds_binned[1][1] / xtol[1])]
+    
+    res_scaled = minimize(geom_loss_wrapper, np.asarray(p0_scaled, float),
                    method=min_method,
-                   bounds=bounds_binned,
-                   options={'maxiter': maxiter, 'disp': True, 'xtol': xtol})
+                   bounds=bounds_scaled,
+                   options={'maxiter': maxiter, 'disp': True, 'xtol': 1.0})
+    
+    res_real = res_scaled
+    res_real.x = np.array([res_scaled.x[0] * xtol[0],
+                           res_scaled.x[1] * xtol[1]])
+
     if save_slices:
-        return res, evaluations, slices
+        return res_real, evaluations, slices
     else:
-        return res, evaluations
+        return res_real, evaluations
     
 def linear_cor_scan(data, ag, tilt_fixed, cor_vals, voxel_num_z=256, recon_method='FBP', recon_iters=None, loss_kind='L2', save_slices=False):
     losses = np.zeros(len(cor_vals))
@@ -550,7 +565,7 @@ res, evaluations = joint_geometry_reconstruction(data_binned, ag_binned, binning
                                     recon_iters=15,
                                     voxel_num_z=256,
                                     bounds=bounds,
-                                    xtol = 0.2)
+                                    xtol = (0.5, 0.2))
 tilt_min = res.x[0]
 cor_min = res.x[1]*binning
 print("Optimised tilt, CoR =", tilt_min, cor_min)
@@ -567,16 +582,18 @@ ag_binned = data_binned.geometry
 ig_binned = ag_binned.get_ImageGeometry()
 
 bounds = [(tilt_min-0.5, tilt_min+0.5), (cor_min-0.5, cor_min+0.5)]
-p_opt, loss = joint_geometry_reconstruction(data_binned, ag_binned, binning=binning,
+res, evaluations = joint_geometry_reconstruction(data_binned, ag_binned, binning=binning,
                                     p0=(tilt_min, cor_min),
                                     recon_iters=15,
                                     voxel_num_z=256,
                                     bounds=bounds,
-                                    xtol = 0.01)
+                                    xtol = (0.02,0.01))
 
-print("Optimised tilt, CoR =", p_opt[0], p_opt[1]*binning)
-tilt_min = p_opt[0]
-cor_min = p_opt[1]*binning
+tilt_min = res.x[0]
+cor_min = res.x[1]*binning
+
+print("Optimised tilt, CoR =", tilt_min, cor_min)
+
 
 # %%
 update_geometry(ag, tilt_min, cor_min)
