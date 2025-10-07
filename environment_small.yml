@@ -1,0 +1,16 @@
+name: lamino_small
+channels:
+  - conda-forge
+  - https://software.repos.intel.com/python/conda
+  - ccpi
+
+dependencies:
+  - python=3.12
+  - ccpi::cil=24.3.0
+  - numpy=1.26
+  - astra-toolbox=2.1=cuda*
+  - ipykernel 
+  - ipywidgets 
+  - matplotlib-base >=3.3.0
+  - scipy
+  - scikit-image

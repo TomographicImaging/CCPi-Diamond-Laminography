@@ -72,25 +72,8 @@ ig.voxel_num_z = 300
 fbp = FBP(ig, ag)
 recon = fbp(data)
 show2D(recon)
+# %%
 
-tilt = 30
-offset = 5
-# create the tilted rotation axis
-tilt_rad = np.deg2rad(tilt)
-rotation_matrix = R.from_rotvec(tilt_rad * detector_x_direction)
-tilted_rotation_axis = rotation_matrix.apply(rotation_axis)
-
-ag.config.system.rotation_axis.direction = tilted_rotation_axis
-ag.set_centre_of_rotation(offset=offset, distance_units='pixels')
-show_geometry(ag)
-ig = ag.get_ImageGeometry()
-ig.voxel_num_z = 300 
-fbp = FBP(ig, ag)
-recon = fbp(data)
-show2D(recon)
-
-print(ag.config.system.rotation_axis.position)
-print(ag.config.system.rotation_axis.direction)
 
 # %%
 

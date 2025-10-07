@@ -1,9 +1,8 @@
-
-
 # %%
 import os
 import sys
 import numpy as np
+
 import scipy
 import json
 
@@ -12,7 +11,7 @@ from gvxrPython3 import gvxr
 from gvxrPython3 import gvxr2json
 from gvxrPython3.JSON2gVXRDataReader import *
 
-sys.path.append(os.path.abspath('../DIAD2gVXR/code'))
+sys.path.append(os.path.abspath('../../DIAD2gVXR/code'))
 from DiadModel import DiadModel
 
 from cil.processors import TransmissionAbsorptionConverter

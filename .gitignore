@@ -1,0 +1,5 @@
+output_data/
+stl_files/
+alignment_methods/data/
+create_simulations/output_data/
+*__pycache__*
