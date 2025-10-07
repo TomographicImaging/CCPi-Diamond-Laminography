@@ -21,8 +21,11 @@ log = logging.getLogger(__name__)
 
 class GeometryCorrector(Processor):
 
-    def __init__(self, initial_parameters=(30.0, 0.0), parameter_bounds=[(25, 45),(-2, 2)], parameter_tolerance=1e-6, 
+    def __init__(self, initial_parameters=(30.0, 0.0), parameter_bounds=[(25, 45),(-5, 5)], parameter_tolerance=1e-6, 
                  initial_binning=None, angle_binning = None, reduced_volume = None):
+        """
+        
+        """
         kwargs = {
                     'initial_parameters'  : initial_parameters,
                     'parameter_bounds' : parameter_bounds,
@@ -122,7 +125,7 @@ class GeometryCorrector(Processor):
         bounds_scaled = [(bounds_binned[0][0] / xtol[0], bounds_binned[0][1] / xtol[0]),
                          (bounds_binned[1][0] / xtol[1],  bounds_binned[1][1] / xtol[1])]
         
-        print(f"Bounds = ({bounds[0]:.3f}:{bounds[1]:.3f})")
+        print(f"Tilt bounds : ({bounds[0][0]:.3f}:{bounds[0][1]:.3f}), CoR bounds : ({bounds[1][0]:.3f}:{bounds[1][1]:.3f})")
 
         target = max(np.ceil(data.get_dimension_size('angle') / 10), 36)
         divider = np.floor(data.get_dimension_size('angle') / target)
@@ -258,8 +261,8 @@ class GeometryCorrector(Processor):
             fig.colorbar(scatter, label='Loss value', ax=ax)
             ax.set_xlabel('Tilt')
             ax.set_ylabel('Cor')
-            ax.set_title('bounds = ({:.2f}:{:.2f}), ({:.2f}:{:.2f}), binning = {}, xtol = ({}, {}) \n result = {:.3f}'
-                        .format(*eval['bounds'][0], *eval['bounds'][1], eval['binning'], *eval['xtol'], eval['result'].x))
+            ax.set_title('bounds = ({:.2f}:{:.2f}), ({:.2f}:{:.2f}), binning = {}, xtol = ({}, {}) \n result = ({:.3f}, {:.3f})'
+                        .format(*eval['bounds'][0], *eval['bounds'][1], eval['binning'], *eval['xtol'], eval['result'].x[0], eval['result'].x[1]))
             ax.grid()
         plt.tight_layout()
 
@@ -335,9 +338,9 @@ roi = {
 data_binned = Binner(roi)(data)
 
 # %%
-
 vs = VolumeShrinker()
 ig_reduced = vs.run(data_binned)
+
 # %%
 cor = 2 # pix
 tilt = 34.5 # deg
@@ -370,5 +373,3 @@ recon = fbp(data_corrected)
 show2D(recon)
 
 # %%
-
-
