@@ -43,7 +43,7 @@ show2D(lines,
        num_cols=3,
        origin='lower-left')
 # %%
-tilt = 0 # degrees
+tilt = 20 # degrees
 tilt_rad = np.deg2rad(tilt)
 tilt_direction = np.array([1, 0, 0])
 beam_direction = np.array([0, 1, 0])
@@ -55,28 +55,35 @@ tilted_rotation_axis = rotation_matrix.apply(untilted_rotation_axis)
 #     .set_angles([0])\
 #     .set_panel(lines.shape[1:3])
 
-ag = AcquisitionGeometry.create_Parallel3D(rotation_axis_direction=untilted_rotation_axis)\
+ag = AcquisitionGeometry.create_Parallel3D(rotation_axis_direction=tilted_rotation_axis)\
     .set_angles(np.arange(0,360,1))\
     .set_panel(lines.shape[1:3])
+
+print(ag.system_description)
+print(ag.config.system.rotation_axis.direction)
+# %%
+show_geometry(ag, ig)
 # ag_tilted = AcquisitionGeometry.create_Parallel3D(rotation_axis_direction=tilted_rotation_axis)\
 #     .set_angles(np.arange(0,360,1))\
 #     .set_panel(lines.shape[1:3])
 
-geo, angles = CIL2TIGREGeometry.getTIGREGeometry(ig, ag)
+# geo, angles = CIL2TIGREGeometry.getTIGREGeometry(ig, ag)
 
 
 # %%
-show_geometry(ag, ig)
+
 # %%
 # A = ProjectionOperator(ig, ag)
 # proj = A.direct(lines)
 # show2D(proj, slice_list=[(0,0),(0,1),(0,2)])
-# %%
 
-geo, angles = CIL2TIGREGeometry.getTIGREGeometry(ig, ag)
+
+
+# %%
+# geo, angles = CIL2TIGREGeometry.getTIGREGeometry(ig, ag)
 euler_angles = []
-for angle in angles:
-    R1 = R.from_euler("z", angle, degrees=False)
+for angle in ag.angles:
+    R1 = R.from_euler("z", np.deg2rad(angle), degrees=False)
     combined = rotation_matrix * R1
     euler = combined.as_euler("ZYZ", degrees=False)
     euler_angles.append(euler)
