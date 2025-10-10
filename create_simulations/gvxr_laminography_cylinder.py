@@ -1,17 +1,13 @@
 # %%
 import os
-import sys
 import numpy as np
-import scipy
 from scipy.spatial.transform import Rotation as R
+import time
 
 import matplotlib.pyplot as plt
 from gvxrPython3 import gvxr
+from gvxrPython3.twins.utils import createDigitalTwin
 from gvxrPython3.JSON2gVXRDataReader import *
-
-#see https://github.com/TomographicImaging/DIAD2gVXR/tree/main/code
-sys.path.append(os.path.abspath('../../DIAD2gVXR/code'))
-from DiadModel import DiadModel
 
 from cil.processors import TransmissionAbsorptionConverter
 from cil.utilities.display import show_geometry, show2D
@@ -23,32 +19,47 @@ from cil.plugins.astra.processors import FBP
 from cil.io import NEXUSDataWriter
 # %%
 tilt = 30
-output_path = "output_data"
-simulation_name = "cylinder"
+output_path = "../output_data"
+simulation_name = "cylinder_fullsize"
 if not os.path.exists(output_path):
     os.makedirs(output_path)
-    
-# %% Use DIAD model
-diad_model = DiadModel()
-# diad_model.detector_cols = 500
-# diad_model.detector_rows = 500
-diad_model.initSimulationEnegine()
+# %%
+gvxr.createOpenGLContext(0,
+                             4, 6,
+                             32)  # 0 for mixed-precision (good compromise between speed and accuracy),
+                                                    # 16 for half-precision (the fastest but maybe not that accurate),
 
-energy_in_keV = 25
-exposure_in_sec = 3.0
-gain = diad_model.initExperimentalParameters(1.0, "mm", energy_in_keV, exposure_in_sec)
 
 
 # %%
+# diad_model.detector_cols = 500
+# diad_model.detector_rows = 500
+diad = createDigitalTwin(name="DIAD")
+diad.beam.kev = 25
+diad.detector.exposure = 10.0
+
+g_downsampling_factor = 2
+if g_downsampling_factor > 1:
+
+    for resolution in diad.specification.detector.resolutions:
+        resolution[0] = round(resolution[0] / g_downsampling_factor)
+        resolution[1] = round(resolution[1] / g_downsampling_factor)
+
+    diad.specification.detector.pixel_pitch *= g_downsampling_factor
+
+diad.apply()
+
+# %%
 gvxr.removePolygonMeshesFromSceneGraph()
+gvxr.enablePoissonNoise()
 cylinder_radius =  500
 sphere_radius =  50
-gvxr.makeCylinder(simulation_name, 100, sphere_radius*2, cylinder_radius, "um")
+gvxr.makeCylinder(simulation_name, 50, sphere_radius*2, cylinder_radius, "um")
 gvxr.setNodeTransformationMatrix(simulation_name, [[1, 0, 0, 0], 
                                                    [0, 1, 0, 0], 
                                                    [0, 0, 1, 0], 
                                                    [0, 0, 0, 1]])
-gvxr.rotateNode(simulation_name, 90, 1, 0, 0)
+# gvxr.rotateNode(simulation_name, 90, 1, 0, 0)
 
 sphere_spacing = 2 * sphere_radius + (sphere_radius/2)
 
@@ -86,62 +97,60 @@ show2D(x_ray_image)
 
 # %%
 # Tilt the sample and compute an x-ray image
-tilt_axis = np.array([0, 0, 1])
+tilt_axis = np.array([1, 0, 0])
 gvxr.rotateNode(simulation_name, tilt, *tilt_axis)
 print("Compute an X-ray image")
 x_ray_image = np.array(gvxr.computeXRayImage(), dtype=np.single)/ gvxr.getTotalEnergyWithDetectorResponse()
 show2D(x_ray_image)
 
 # %% Check CT rotation axis
-# gvxr.rotateNode(simulation_name, 20, 0, 1, 0)
+# gvxr.rotateNode(simulation_name, -40, 0, 1, 0)
 
 # print("Compute an X-ray image")
-# x_ray_image = (gain * np.array(gvxr.computeXRayImage()).astype(np.single)).astype(np.uint16)
+# x_ray_image = np.array(gvxr.computeXRayImage(), dtype=np.single)/ gvxr.getTotalEnergyWithDetectorResponse()
 # show2D(x_ray_image)
 
 # %% Simulate a CT scan
 start = 0
 stop = 360
-step = 1
+step = 360/int((np.pi/2)*gvxr.getDetectorNumberOfPixels()[0])
 angle_set = np.arange(start, stop, step)
-xray_image_set = np.zeros((stop, gvxr.getDetectorNumberOfPixels()[1], gvxr.getDetectorNumberOfPixels()[0]))
-
-for i in angle_set:
+data = np.zeros((len(angle_set), gvxr.getDetectorNumberOfPixels()[1], gvxr.getDetectorNumberOfPixels()[0]))
+t0 = time.time()
+for i, angle in enumerate(angle_set):
     # Rotate
     gvxr.rotateNode(simulation_name, step, 0, 1, 0)
     # Compute xray image
     xray_image = np.array(gvxr.computeXRayImage(), dtype=np.single)/ gvxr.getTotalEnergyWithDetectorResponse()
-    xray_image_set[i] = xray_image
-
-# islicer(xray_image_set)
+    data[i] = xray_image
+print((time.time()-t0)/60)
+# islicer(data)
 
 # %%
-beam_direction = np.array(gvxr.getDetectorPosition("mm"))/np.linalg.norm(np.array(gvxr.getDetectorPosition("mm")))
-axis_to_apply_tilt = np.array([0, 1, 0]) # I don't understand why this isn't the beam direction
 
-print("Apply tilt: ", tilt, " degrees, along direction: ", axis_to_apply_tilt)
-rotation_matrix = R.from_rotvec(np.radians(tilt) * axis_to_apply_tilt)
-orthogonal_axis = np.array(gvxr.getDetectorUpVector())
-print("Untilted rotation axis: ", orthogonal_axis)
-rotation_axis = rotation_matrix.apply(orthogonal_axis)
-print("Tilted rotation axis: ", rotation_axis)
+detector_direction_x = np.array([1, 0, 0])
+detector_direction_y = np.array([0, 0, -1])
+rotation_axis = np.array([0, 0, 1])
 
-# %% 
-ag = AcquisitionGeometry.create_Parallel3D(ray_direction = beam_direction,
-                                      detector_position = list(gvxr.getDetectorPosition("mm")),
-                                      detector_direction_x = list(gvxr.getDetectorRightVector()),
-                                      detector_direction_y = list(gvxr.getDetectorUpVector()),
-                                      rotation_axis_position = list(gvxr.getCentreOfRotationPositionCT("mm")),
-                                      rotation_axis_direction = list(rotation_axis))                                 
+tilt_rad = np.deg2rad(tilt)
+rotation_matrix = R.from_rotvec(tilt_rad * detector_direction_x)
+tilted_rotation_axis = rotation_matrix.apply(rotation_axis)
+
+ag = AcquisitionGeometry.create_Parallel3D(detector_direction_x = detector_direction_x,
+                                      detector_direction_y = detector_direction_y,
+                                      rotation_axis_direction = tilted_rotation_axis)              
 ag.set_angles(angle_set)
 ag.set_panel(list(gvxr.getDetectorNumberOfPixels()),
-             list([diad_model.effective_pixel_spacing_in_um[0]/1000, diad_model.effective_pixel_spacing_in_um[0]/1000]))
+             list([gvxr.getDetectorPixelSpacing("mm")[1], gvxr.getDetectorPixelSpacing("mm")[0]]))
 show_geometry(ag)
 # %%
-data = AcquisitionData(xray_image_set, geometry=ag)
-# islicer(data)
+gvxr.destroy()
+del x_ray_image
+del diad
 # %%
-del xray_image_set
+data = AcquisitionData(data, deep_copy=False, geometry=ag)
+
+# islicer(data)
 # %%
 # Normaliser
 # max = data.max()
@@ -154,21 +163,25 @@ del xray_image_set
 
 # # Apply Beer-Lambert law
 data = TransmissionAbsorptionConverter(white_level=1.0)(data)
-print(data.min())
-print(data.max())
-show2D(data, slice_list=[('angle', 0), ('angle', 45), ('angle',90), ('angle', 135), ('angle',180)], num_cols=5)
+
+# show2D(data, slice_list=[('angle', 0), ('angle', 45), ('angle',90), ('angle', 135), ('angle',180)], num_cols=5)
 
 # %%
-
-
 data.reorder('astra')
+t0 = time.time()
+
 fbp = FBP(data.geometry.get_ImageGeometry(), data.geometry)
 recon = fbp(data)
-
+print(time.time() - t0)
 # recon.apply_circular_mask(0.9)
-show2D([recon]) 
+# %%
+slice_list = [('vertical','centre'), ('horizontal_y',int(recon.shape[2]/2)), ('horizontal_x',int(recon.shape[1]/2))]
+show2D(recon,
+       slice_list=slice_list,
+       num_cols=3)
 
 # %% Save normalised data with geometry
 file_name = os.path.join(output_path, simulation_name + str(len(angle_set))) #### update the filename here ####
+print(file_name)
 data.reorder('cil')
 NEXUSDataWriter(data=data, file_name=file_name).write()
