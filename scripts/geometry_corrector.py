@@ -13,7 +13,6 @@ from cil.processors import Binner, Slicer
 from cil.framework import AcquisitionData
 from cil.framework.labels import AcquisitionType, AcquisitionDimension
 
-from shrink_volume import VolumeShrinker
 import logging
 log = logging.getLogger(__name__)
 
@@ -21,9 +20,48 @@ log = logging.getLogger(__name__)
 
 class GeometryCorrector(Processor):
 
-    def __init__(self, initial_parameters=(30.0, 0.0), parameter_bounds=[(25, 45),(-5, 5)], parameter_tolerance=1e-6, 
-                 initial_binning=None, angle_binning = None, reduced_volume = None):
+    def __init__(self, initial_parameters=(30.0, 0.0), parameter_bounds=[(30, 40),(-10, 10)], parameter_tolerance=(0.01, 0.01), 
+                 coarse_binning=None, final_binning = None, angle_binning = None, reduced_volume = None):
         """
+        Initialize a GeometryCorrector processor to optimize tilt and center-of-rotation for laminography data.
+        
+        Parameters
+        ----------
+        initial_parameters : tuple of float, optional
+            Initial guess for the geometry parameters (tilt_angle_deg, center_of_rotation_pix).
+            Defaults to (30.0, 0.0).
+
+        parameter_bounds : list of tuple of float, optional
+            Bounds for the parameters [(tilt_min, tilt_max), (cor_min, cor_max)].
+            Defaults to [(30, 40), (-10, 10)].
+
+        parameter_tolerance : tuple of float, optional
+            Convergence tolerance for optimisation of parameters, (tilt_tol, cor_tol).
+            Defaults to (0.01, 0.01).
+
+        coarse_binning : int, optional
+            Initial binning factor applied to the input dataset for coarse optimisation.
+            If None, a value based on dataset size is used.
+
+        final_binning : int, optional
+            Final binning factor applied for fine optimisation optimisation.
+            If None, no binning is applied in the fine optimisation step.
+
+        angle_binning : float, optional
+            Subsampling factor for the angular dimension during optimisation.
+            If None, automatically determined based on input dataset.
+
+        reduced_volume : ImageGeometry, optional
+            A reduced-resolution volume to be used for optimisation, e.g. obtained using VolumeShrinker.
+            If None, the full dataset is used.
+
+            
+        Example
+        -------
+
+        >>> processor = GeometryCorrector(initial_parameters=(tilt, cor), parameter_bounds=(tilt_bounds, cor_bounds), parameter_tolerance=(tilt_tol, cor_tol))
+        >>> processor.set_input(data)
+        >>> data_corrected = processor.get_output()
         
         """
         kwargs = {
@@ -31,7 +69,8 @@ class GeometryCorrector(Processor):
                     'parameter_bounds' : parameter_bounds,
                     'parameter_tolerance' : parameter_tolerance,
                     'reduced_volume' : reduced_volume,
-                    'initial_binning' : initial_binning,
+                    'coarse_binning' : coarse_binning,
+                    'final_binning' : final_binning,
                     'angle_binning' : angle_binning,
                     'evaluations' : []
                     }
@@ -98,7 +137,6 @@ class GeometryCorrector(Processor):
         recon = FBP(ig, ag)(data)
         recon.apply_circular_mask(0.9)
 
-        # ag = Slicer(roi={'angle':(None, None, divider)})(ag)
         ag_ref = self.update_geometry(ag_ref, tilt_deg, cor_pix)
         A = ProjectionOperator(ig, ag_ref)
         
@@ -115,7 +153,6 @@ class GeometryCorrector(Processor):
 
         current_run_evaluations = []
         xtol = self.parameter_tolerance
-        xtol_binned = (xtol[0], binning*xtol[1])
         p0_binned = (p0[0], p0[1]/binning)
         bounds_binned = (bounds[0], (bounds[1][0]/binning, bounds[1][1]/binning))
 
@@ -124,6 +161,9 @@ class GeometryCorrector(Processor):
         
         bounds_scaled = [(bounds_binned[0][0] / xtol[0], bounds_binned[0][1] / xtol[0]),
                          (bounds_binned[1][0] / xtol[1],  bounds_binned[1][1] / xtol[1])]
+        
+        bounds_widths = np.array([b[1] - b[0] for b in bounds_scaled])
+        direc = np.diag(bounds_widths / np.max(bounds_widths))
         
         print(f"Tilt bounds : ({bounds[0][0]:.3f}:{bounds[0][1]:.3f}), CoR bounds : ({bounds[1][0]:.3f}:{bounds[1][1]:.3f})")
 
@@ -134,17 +174,13 @@ class GeometryCorrector(Processor):
         ag = data.geometry.copy()
         ag_ref = Slicer(roi={'angle':(None, None, divider)})(ag)
 
-        ig = ag.get_ImageGeometry()
-        if self.reduced_volume is not None:
-            ig.voxel_num_z = self.reduced_volume.voxel_num_z//binning
-            ig.voxel_num_x = self.reduced_volume.voxel_num_x//binning
-            ig.voxel_num_y = self.reduced_volume.voxel_num_y//binning
-            ig.center_x = self.reduced_volume.center_x//binning
-            ig.center_y = self.reduced_volume.center_y//binning
-            ig.center_z = self.reduced_volume.center_z//binning
+        if self.reduced_volume is None:
+            ig = ag.get_ImageGeometry()
+        else:
+            ig = Binner(roi={'horizontal_x':(None, None,binning), 'horizontal_y':(None, None,binning), 'vertical':(None, None,binning)})(self.reduced_volume)
 
-        loss_at_p0, _ = self.projection_reprojection(data, ig, ag, ag_ref, y_ref, p0_binned[0], p0_binned[1])
-        ftol = self.ftol_from_bounds_and_xtol(loss_at_p0, 1, bounds_scaled)
+        # loss_at_p0, _ = self.projection_reprojection(data, ig, ag, ag_ref, y_ref, p0_binned[0], p0_binned[1])
+        # ftol = self.ftol_from_bounds_and_xtol(loss_at_p0, 1, bounds_scaled)
         
         def loss_function_wrapper(p):
             tilt = p[0] * xtol[0]
@@ -161,7 +197,7 @@ class GeometryCorrector(Processor):
         res_scaled = minimize(loss_function_wrapper, p0_scaled,
                     method='Powell',
                     bounds=bounds_scaled,
-                    options={'maxiter': 5, 'disp': True, 'xtol': 1.0, 'ftol':ftol})
+                    options={'maxiter': 5, 'disp': True, 'xtol': 1.0})
         
         res_real = res_scaled
         res_real.x = np.array([res_scaled.x[0] * xtol[0],
@@ -190,9 +226,9 @@ class GeometryCorrector(Processor):
     def process(self, out=None):
         data = self.get_input()
 
-        if self.initial_binning is None:
-            self.initial_binning = min(int(np.ceil(data.geometry.config.panel.num_pixels[0] / 128)),16)
-        binning = self.initial_binning
+        if self.coarse_binning is None:
+            self.coarse_binning = min(int(np.ceil(data.geometry.config.panel.num_pixels[0] / 256)),5)
+        binning = self.coarse_binning
         if self.angle_binning is None:
             self.angle_binning = np.ceil(data.get_dimension_size('angle')/(data.get_dimension_size('horizontal')*(np.pi/2)))
         roi = {
@@ -200,9 +236,7 @@ class GeometryCorrector(Processor):
                 'vertical': (None, None, binning),
                 'angle': (None, None, self.angle_binning*binning)
             }
-        #gaussian filter data
-        # data_binned = data.copy()
-        # data_binned.fill(gaussian_filter(data.as_array(), [binning//2, 0, binning//2]))
+
         data_binned = Binner(roi)(data)
         
         coarse_tolerance = (self.parameter_tolerance[0], self.parameter_tolerance[1])
@@ -214,21 +248,27 @@ class GeometryCorrector(Processor):
         cor_min = res.x[1]
         print(f"Coarse scan optimised tilt = {tilt_min:.3f}, CoR = {cor_min:.3f}")
 
-        binning = 1
+        if self.final_binning is None:
+            binning = 1
+        else:
+            binning = self.final_binning
         roi = {
                 'horizontal': (None, None, binning),
                 'vertical': (None, None, binning),
                 'angle': (None, None, self.angle_binning)
             }
-        #gaussian filter data
-        # data_binned = data.copy()
-        # data_binned.fill(gaussian_filter(data.as_array(), [binning//2, 0, binning//2]))
+
         data_binned = Binner(roi)(data)
 
-        m = 3 # how many coarse-tolerance units to extend on either side of the coarse optimum to set the fine search bounds
-        
-        fine_bounds_tilt = (tilt_min - m * coarse_tolerance[0], tilt_min + m * coarse_tolerance[0])
-        fine_bounds_cor = (cor_min - m * coarse_tolerance[1], cor_min + m * coarse_tolerance[1])
+        search_factor = 2                # multiplier on parameter_tolerance
+        min_search_range_tilt = 1.0      # deg
+        min_search_range_cor  = 1.0      # pix
+
+        half_width_tilt = max(search_factor * coarse_tolerance[0], min_search_range_tilt/2)
+        fine_bounds_tilt = (tilt_min - half_width_tilt, tilt_min + half_width_tilt)
+
+        half_width_cor = max(search_factor * coarse_tolerance[1], min_search_range_cor/2)
+        fine_bounds_cor = (cor_min - half_width_cor, cor_min + half_width_cor)
 
         res = self.minimise_geometry(data_binned, binning=binning,
                                             p0=(tilt_min, cor_min), bounds=[fine_bounds_tilt, fine_bounds_cor])
@@ -267,109 +307,4 @@ class GeometryCorrector(Processor):
         plt.tight_layout()
 
 
-# %%
-from cil.io.utilities import HDF5_utilities
-from cil.framework import AcquisitionData, AcquisitionGeometry
-from cil.processors import TransmissionAbsorptionConverter, Normaliser
-from cil.utilities.display import show2D, show_geometry
-from cil.utilities.jupyter import islicer
-from cil.plugins.astra.processors import FBP
 
-import numpy as np
-from scipy.spatial.transform import Rotation as R
-import time
-
-file_path = "../alignment_methods/data/k11-54286.nxs"
-detector_pixel_size=0.54 # um - get this from the file in future
-
-data = HDF5_utilities.read(file_path, '/entry/imaging/data')
-image_key = HDF5_utilities.read(file_path, '/entry/instrument/EtherCAT/image_key')
-angles = HDF5_utilities.read(file_path, '/entry/imaging_sum/smaract_zrot')
-
-unique_keys, counts = np.unique(image_key, return_counts=True)
-for key, count in zip(unique_keys, counts):
-    key_type = {0: "Tomography", 1: "Flat field", 2: "Dark field"}.get(key, f"Unknown ({key})")
-    print(f"  {key_type} images: {count}")
-
-flat_fields = data[np.where(image_key == 1)[0]]
-dark_fields = data[np.where(image_key == 2)[0]]
-projections = data[np.where(image_key == 0)[0]]
-projection_angles = angles[np.where(image_key == 0)[0]]
-
-cor = 2 # pix
-tilt = 31 # deg
-ag = AcquisitionGeometry.create_Parallel3D(units="microns")
-ag.set_panel(num_pixels=[projections.shape[2], projections.shape[1]],
-        origin='top-left',
-        pixel_size=detector_pixel_size)
-ag.set_angles(projection_angles)
-
-ag.set_centre_of_rotation(offset=cor, distance_units='pixels')
-
-tilt_direction_vector=np.array([1, 0, 0])
-original_rotation_axis=np.array([0, 0, 1])
-
-rotation_matrix = R.from_rotvec(np.deg2rad(tilt) * tilt_direction_vector)
-tilted_rotation_axis = rotation_matrix.apply(original_rotation_axis)
-
-ag.config.system.rotation_axis.direction = tilted_rotation_axis
-
-acq_data = AcquisitionData(projections, deep_copy=False, geometry=ag)
-acq_data = Normaliser(np.mean(flat_fields, axis=0), np.mean(dark_fields, axis=0))(acq_data)
-acq_data = TransmissionAbsorptionConverter(min_intensity=1e-6)(acq_data)
-acq_data.reorder('astra')
-data = acq_data
-# %%
-# ag = acq_data.geometry
-# ig = ag.get_ImageGeometry()
-# fbp = FBP(ig, ag)
-# recon = fbp(acq_data)
-# show2D(recon)
-# %%
-
-binning = min(int(np.ceil(data.geometry.config.panel.num_pixels[0] / 128)),16)
-binning = 2
-angle_binning = np.ceil(data.get_dimension_size('angle')/(data.get_dimension_size('horizontal')*(np.pi/2)))
-roi = {
-        'horizontal': (None, None, binning),
-        'vertical': (None, None, binning),
-        'angle': (None, None, angle_binning*binning)
-    }
-data_binned = Binner(roi)(data)
-
-# %%
-vs = VolumeShrinker()
-ig_reduced = vs.run(data_binned)
-
-# %%
-cor = 2 # pix
-tilt = 34.5 # deg
-
-optimise_geometry = True
-cor_bounds = (-10, 10) # pixels
-tilt_bounds = (30, 40) # deg
-tilt_tol = 0.01 # deg
-cor_tol = 0.01 # pixels
-
-if optimise_geometry:
-    
-    t0 = time.time()
-
-    processor = GeometryCorrector(initial_parameters=(tilt, cor), parameter_bounds=(tilt_bounds, cor_bounds), parameter_tolerance=(tilt_tol, cor_tol),
-                                  reduced_volume=ig_reduced)
-
-    processor.set_input(data_binned)
-    data_corrected = processor.get_output()
-    print((time.time()-t0)/60)
-else:
-    data_corrected = data
-
-processor.plot_evaluations()
-# %%
-ag = data_corrected.geometry
-ig = ag.get_ImageGeometry()
-fbp = FBP(ig, ag)
-recon = fbp(data_corrected)
-show2D(recon)
-
-# %%

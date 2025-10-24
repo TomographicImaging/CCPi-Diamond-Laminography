@@ -15,7 +15,7 @@ class VolumeShrinker(object):
     connected components.   
     """
 
-    def run(self, data, auto=True, manual_limits=None):
+    def run(self, data, auto=True, threshold='Otsu', buffer=None, manual_limits=None):
         """
         Parameters
         ----------
@@ -23,7 +23,15 @@ class VolumeShrinker(object):
             If True, automatically detect and crop the reconstruction volume
             If False, use manual_limits
 
-        manual_limits : dict
+        threshold: string or float, optional
+            If automatically detecting the limits, specify the intensity threshold
+            between sample and background. By default use an Otsu filter. 
+
+        buffer: float, optional
+            Add a buffer around the automatically detected limits, expressed as 
+            a percentage of the axis size.
+
+        manual_limits : dict, optional
             The limits {'axis_name1':(min, max), 'axis_name2':(min, max)}
             The `key` being the axis name to apply the processor to, 
             the `value` holding a tuple containing the min and max limits
@@ -48,7 +56,7 @@ class VolumeShrinker(object):
         recon.apply_circular_mask(0.9)
 
         if auto:
-            bounds = self.reduce_reconstruction_volume(recon, binning)
+            bounds = self.reduce_reconstruction_volume(recon, binning, threshold, buffer)
         else:
             bounds = {}
             for dim in recon.dimension_labels:
@@ -104,14 +112,14 @@ class VolumeShrinker(object):
             ax.set_ylabel(y_dim)
             ax.set_title(f"Maximum values in direction: {dim}")
 
-    def reduce_reconstruction_volume(self, recon, binning):
+    def reduce_reconstruction_volume(self, recon, binning, threshold, buffer):
             
         dims = recon.dimension_labels
         all_bounds = {dim: [] for dim in dims}
 
         for dim in dims:
             arr = recon.max(axis=dim).array
-            mask, large_components_mask = self.otsu_large_components(arr)
+            mask, large_components_mask = self.otsu_large_components(arr, threshold)
 
             x_indices = np.where(np.any(large_components_mask, axis=0))[0]
             y_indices = np.where(np.any(large_components_mask, axis=1))[0]
@@ -121,8 +129,22 @@ class VolumeShrinker(object):
             axis = recon.get_dimension_axis(dim)
             other_axes = [j for j in range(recon.ndim) if j != axis]
 
-            all_bounds[dims[other_axes[0]]].append((y_min, y_max))
-            all_bounds[dims[other_axes[1]]].append((x_min, x_max))
+            if buffer is not None:
+                y_full = recon.get_dimension_size(dims[other_axes[0]])
+                buffer_pix = int(y_full*(buffer/100))
+                y_min_buffer = np.max([0, y_min-buffer_pix])
+                y_max_buffer = np.min([y_full, y_max+buffer_pix])
+
+                x_full = recon.get_dimension_size(dims[other_axes[1]])
+                buffer_pix = int(x_full*(buffer/100))
+                x_min_buffer = np.max([0, x_min-buffer_pix])
+                x_max_buffer = np.min([x_full, x_max+buffer_pix])
+
+                all_bounds[dims[other_axes[0]]].append((y_min_buffer, y_max_buffer))
+                all_bounds[dims[other_axes[1]]].append((x_min_buffer, x_max_buffer))
+            else:
+                all_bounds[dims[other_axes[0]]].append((y_min, y_max))
+                all_bounds[dims[other_axes[1]]].append((x_min, x_max))
 
         bounds = {}
         for dim in dims:
@@ -139,10 +161,17 @@ class VolumeShrinker(object):
             
         return bounds
         
-    def otsu_large_components(self, arr):
+    def otsu_large_components(self, arr, threshold):
         
-        thresh = threshold_otsu(arr[arr > 0])
+
+        if isinstance(threshold, (int, float)):
+            thresh = threshold
+        elif isinstance(threshold, str) and threshold.lower() == 'otsu':
+            thresh = threshold_otsu(arr[arr > 0])
+        else:
+            raise ValueError(f"Threshold {threshold} not recognised, must be a number or 'Otsu'")
         mask = arr > thresh
+
 
         labeled_mask, num_features = label(mask)
         component_sizes = np.bincount(labeled_mask.ravel())
