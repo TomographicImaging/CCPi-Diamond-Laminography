@@ -148,7 +148,7 @@ class GeometryCorrector(Processor):
         return loss, recon
     
    
-    def minimise_geometry(self, data, binning, p0, bounds):
+    def minimise_geometry(self, data, binning, p0, bounds, calculate_ftol):
         
 
         current_run_evaluations = []
@@ -162,8 +162,7 @@ class GeometryCorrector(Processor):
         bounds_scaled = [(bounds_binned[0][0] / xtol[0], bounds_binned[0][1] / xtol[0]),
                          (bounds_binned[1][0] / xtol[1],  bounds_binned[1][1] / xtol[1])]
         
-        bounds_widths = np.array([b[1] - b[0] for b in bounds_scaled])
-        direc = np.diag(bounds_widths / np.max(bounds_widths))
+        direc = np.diag(np.asarray(xtol) / np.min(xtol))
         
         print(f"Tilt bounds : ({bounds[0][0]:.3f}:{bounds[0][1]:.3f}), CoR bounds : ({bounds[1][0]:.3f}:{bounds[1][1]:.3f})")
 
@@ -178,9 +177,11 @@ class GeometryCorrector(Processor):
             ig = ag.get_ImageGeometry()
         else:
             ig = Binner(roi={'horizontal_x':(None, None,binning), 'horizontal_y':(None, None,binning), 'vertical':(None, None,binning)})(self.reduced_volume)
-
-        # loss_at_p0, _ = self.projection_reprojection(data, ig, ag, ag_ref, y_ref, p0_binned[0], p0_binned[1])
-        # ftol = self.ftol_from_bounds_and_xtol(loss_at_p0, 1, bounds_scaled)
+        if calculate_ftol:
+            loss_at_p0, _ = self.projection_reprojection(data, ig, ag, ag_ref, y_ref, p0_binned[0], p0_binned[1])
+            ftol = self.ftol_from_bounds_and_xtol(loss_at_p0, 1, bounds_scaled)
+        else:
+            ftol = None
         
         def loss_function_wrapper(p):
             tilt = p[0] * xtol[0]
@@ -193,11 +194,17 @@ class GeometryCorrector(Processor):
             print(f"tilt: {tilt:.3f}, CoR: {cor*binning:.3f}, loss: {loss:.3e}")
 
             return loss
-
-        res_scaled = minimize(loss_function_wrapper, p0_scaled,
-                    method='Powell',
-                    bounds=bounds_scaled,
-                    options={'maxiter': 5, 'disp': True, 'xtol': 1.0})
+        
+        if ftol is not None:
+            res_scaled = minimize(loss_function_wrapper, p0_scaled,
+                        method='Powell',
+                        bounds=bounds_scaled,
+                        options={'maxiter': 5, 'disp': True, 'ftol': ftol, 'xtol': 1.0, 'direc': direc})
+        else:
+           res_scaled = minimize(loss_function_wrapper, p0_scaled,
+                        method='Powell',
+                        bounds=bounds_scaled,
+                        options={'maxiter': 5, 'disp': True, 'xtol': 1.0, 'direc': direc}) 
         
         res_real = res_scaled
         res_real.x = np.array([res_scaled.x[0] * xtol[0],
@@ -219,7 +226,6 @@ class GeometryCorrector(Processor):
         xtol = np.asarray(xtol, dtype=float)
         ranges = np.array([b[1] - b[0] for b in bounds], dtype=float)
         tau = np.min(xtol / ranges)
-        # rel_fatol = base_rel*tau
         ftol = max(min_abs_fatol, tau * abs(loss_at_p0))
         return ftol
     
@@ -242,7 +248,8 @@ class GeometryCorrector(Processor):
         coarse_tolerance = (self.parameter_tolerance[0], self.parameter_tolerance[1])
         res = self.minimise_geometry(data_binned, binning=binning, 
                                                   p0=self.initial_parameters, 
-                                                  bounds=self.parameter_bounds)
+                                                  bounds=self.parameter_bounds,
+                                                  calculate_ftol=False)
         
         tilt_min = res.x[0]
         cor_min = res.x[1]
@@ -271,7 +278,8 @@ class GeometryCorrector(Processor):
         fine_bounds_cor = (cor_min - half_width_cor, cor_min + half_width_cor)
 
         res = self.minimise_geometry(data_binned, binning=binning,
-                                            p0=(tilt_min, cor_min), bounds=[fine_bounds_tilt, fine_bounds_cor])
+                                            p0=(tilt_min, cor_min), bounds=[fine_bounds_tilt, fine_bounds_cor], 
+                                            calculate_ftol=True)
         tilt_min = res.x[0]
         cor_min = res.x[1]
         print(f"Fine scan optimised tilt = {tilt_min:.3f}, CoR ={cor_min:.3f}")
