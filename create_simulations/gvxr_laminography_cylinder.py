@@ -32,8 +32,7 @@ gvxr.createOpenGLContext(0,
 
 
 # %%
-# diad_model.detector_cols = 500
-# diad_model.detector_rows = 500
+
 diad = createDigitalTwin(name="DIAD")
 diad.beam.kev = 25
 diad.detector.exposure = 10.0
@@ -152,16 +151,7 @@ data = AcquisitionData(data, deep_copy=False, geometry=ag)
 
 # islicer(data)
 # %%
-# Normaliser
-# max = data.max()
-# min = data.min()
-# data_norm = Normaliser(flat_field=max*np.ones((data.shape[1],data.shape[2])),
-#                        dark_field=(min-0.1*(max-min))*np.ones((data.shape[1],data.shape[2])))(data)
-# print(data_norm.min())
-# print(data_norm.max())
-# show2D(data_norm, slice_list=[('angle', 0), ('angle', 45), ('angle',90), ('angle', 135), ('angle',180)], num_cols=5)
-
-# # Apply Beer-Lambert law
+# Apply Beer-Lambert law
 data = TransmissionAbsorptionConverter(white_level=1.0)(data)
 
 # show2D(data, slice_list=[('angle', 0), ('angle', 45), ('angle',90), ('angle', 135), ('angle',180)], num_cols=5)
@@ -169,7 +159,6 @@ data = TransmissionAbsorptionConverter(white_level=1.0)(data)
 # %%
 data.reorder('astra')
 t0 = time.time()
-
 fbp = FBP(data.geometry.get_ImageGeometry(), data.geometry)
 recon = fbp(data)
 print(time.time() - t0)
