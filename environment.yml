@@ -1,4 +1,4 @@
-name: lamino
+name: laminography_alignment
 channels:
   - conda-forge
   - https://software.repos.intel.com/python/conda
@@ -16,6 +16,3 @@ dependencies:
   - scikit-image
   - scikit-learn
   - matplotlib-base >=3.3.0
-  - pip
-  - pip:
-    - gvxr>=2.0.10
