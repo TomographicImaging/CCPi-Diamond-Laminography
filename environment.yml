@@ -7,12 +7,13 @@ channels:
 dependencies:
   - python=3.12
   - ccpi::cil=24.3.0
+  - ccpi::ccpi-regulariser=24.0.1
   - numpy=1.26
   - astra-toolbox=2.1=cuda*
-  - ccpi::tigre=2.6
-  - ccpi::ccpi-regulariser=24.0.1
   - ipykernel 
   - ipywidgets 
-  - scikit-image
-  - scikit-learn
   - matplotlib-base >=3.3.0
+  - scipy
+  - scikit-image
+  - pip
+  - jupyterlab
