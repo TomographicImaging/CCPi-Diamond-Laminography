@@ -29,5 +29,6 @@ Code to create simulated laminography data used in testing the alignment tools a
 ## Running the code 
 To run the code in a Jupyter notebook enabled Docker container on a system with access to a GPU, run the following command:
 ```
+docker pull ghcr.io/tomographicimaging/ccpi-diamond-laminography:latest
 docker run --gpus all -p 8888:8888 ghcr.io/tomographicimaging/ccpi-diamond-laminography:latest
 ```
